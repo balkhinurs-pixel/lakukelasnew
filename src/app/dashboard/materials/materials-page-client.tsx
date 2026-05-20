@@ -1,0 +1,405 @@
+
+"use client";
+
+import * as React from "react";
+import { useRouter } from "next/navigation";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  CardFooter
+} from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { PlusCircle, MoreHorizontal, Edit, Trash2, ExternalLink, Link2, BookOpen, Filter, Search, Loader2, Globe } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
+import type { Material, Class, Subject } from "@/lib/types";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import { saveMaterial, deleteMaterial } from "@/lib/actions";
+import { FileCard, type FormatFileProps } from "@/components/ui/file-card-collections";
+import { HandWrittenTitle } from "@/components/ui/hand-writing-text";
+
+const getFileFormat = (url: string): FormatFileProps => {
+    const lowerUrl = url.toLowerCase();
+    if (lowerUrl.includes('youtube.com') || lowerUrl.includes('youtu.be')) return 'video';
+    if (lowerUrl.endsWith('.pdf')) return 'pdf';
+    if (lowerUrl.endsWith('.docx') || lowerUrl.endsWith('.doc')) return 'doc';
+    if (lowerUrl.endsWith('.xlsx') || lowerUrl.endsWith('.xls')) return 'xlsx';
+    if (lowerUrl.endsWith('.csv')) return 'csv';
+    if (lowerUrl.endsWith('.pptx') || lowerUrl.endsWith('.ppt')) return 'ppt';
+    if (lowerUrl.endsWith('.zip') || lowerUrl.endsWith('.rar')) return 'zip';
+    if (lowerUrl.endsWith('.png')) return 'png';
+    if (lowerUrl.endsWith('.jpg') || lowerUrl.endsWith('.jpeg')) return 'jpg';
+    if (lowerUrl.endsWith('.json')) return 'json';
+    if (lowerUrl.includes('drive.google.com')) {
+        if (lowerUrl.includes('spreadsheets')) return 'xlsx';
+        if (lowerUrl.includes('presentation')) return 'ppt';
+        if (lowerUrl.includes('document')) return 'doc';
+        if (lowerUrl.includes('forms')) return 'html';
+    }
+    return 'txt';
+}
+
+export default function MaterialsPageClient({
+    initialMaterials,
+    classes,
+    subjects,
+}: {
+    initialMaterials: Material[];
+    classes: Class[];
+    subjects: Subject[];
+}) {
+    const router = useRouter();
+    const { toast } = useToast();
+    
+    const [isDialogOpen, setIsDialogOpen] = React.useState(false);
+    const [isDeleteDialogOpen, setIsDeleteDialogOpen] = React.useState(false);
+    const [editingMaterial, setEditingMaterial] = React.useState<Material | null>(null);
+    const [materialToDelete, setMaterialToDelete] = React.useState<Material | null>(null);
+    const [filterClass, setFilterClass] = React.useState<string>("all");
+    const [filterSubject, setFilterSubject] = React.useState<string>("all");
+    const [searchTerm, setSearchTerm] = React.useState("");
+    const [loading, setLoading] = React.useState(false);
+
+    const [formState, setFormState] = React.useState({
+        id: "",
+        class_id: "",
+        subject_id: "",
+        title: "",
+        description: "",
+        link_url: "",
+    });
+
+    const handleOpenAddDialog = () => {
+        setEditingMaterial(null);
+        setFormState({ id: "", class_id: "", subject_id: "", title: "", description: "", link_url: "" });
+        setIsDialogOpen(true);
+    };
+
+    const handleOpenEditDialog = (material: Material) => {
+        setEditingMaterial(material);
+        setFormState({
+            id: material.id,
+            class_id: material.class_id,
+            subject_id: material.subject_id,
+            title: material.title,
+            description: material.description || "",
+            link_url: material.link_url,
+        });
+        setIsDialogOpen(true);
+    };
+
+    const handleOpenDeleteDialog = (material: Material) => {
+        setMaterialToDelete(material);
+        setIsDeleteDialogOpen(true);
+    };
+
+    const handleSave = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setLoading(true);
+
+        const formData = new FormData();
+        if (formState.id) formData.append('id', formState.id);
+        formData.append('class_id', formState.class_id);
+        formData.append('subject_id', formState.subject_id);
+        formData.append('title', formState.title);
+        formData.append('description', formState.description);
+        formData.append('link_url', formState.link_url);
+
+        const result = await saveMaterial(formData);
+
+        if (result.success) {
+            toast({ title: "Berhasil", description: `Materi berhasil ${editingMaterial ? 'diperbarui' : 'ditambahkan'}.` });
+            setIsDialogOpen(false);
+            router.refresh();
+        } else {
+            toast({ title: "Gagal", description: result.error, variant: "destructive" });
+        }
+        setLoading(false);
+    };
+
+    const handleDelete = async () => {
+        if (!materialToDelete) return;
+        setLoading(true);
+        const result = await deleteMaterial(materialToDelete.id);
+        if (result.success) {
+            toast({ title: "Berhasil", description: "Materi berhasil dihapus." });
+            setIsDeleteDialogOpen(false);
+            setMaterialToDelete(null);
+            router.refresh();
+        } else {
+            toast({ title: "Gagal", description: result.error, variant: "destructive" });
+        }
+        setLoading(false);
+    };
+
+    const filteredMaterials = React.useMemo(() => {
+        return initialMaterials.filter(m => {
+            const matchesClass = filterClass === "all" || m.class_id === filterClass;
+            const matchesSubject = filterSubject === "all" || m.subject_id === filterSubject;
+            const matchesSearch = m.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                                 (m.description?.toLowerCase() || "").includes(searchTerm.toLowerCase());
+            return matchesClass && matchesSubject && matchesSearch;
+        });
+    }, [initialMaterials, filterClass, filterSubject, searchTerm]);
+
+    return (
+        <div className="space-y-6 p-1">
+            <div className="flex flex-col md:flex-row justify-between items-center gap-6">
+                <HandWrittenTitle 
+                    title="Materi Pembelajaran" 
+                    subtitle="Guru"
+                    className="py-4 md:py-6"
+                />
+                <Button onClick={handleOpenAddDialog} className="bg-primary hover:bg-primary/90 shadow-md shrink-0">
+                    <PlusCircle className="mr-2 h-4 w-4" />
+                    Tambah Materi
+                </Button>
+            </div>
+
+            <Card className="border-0 shadow-lg bg-white/80 backdrop-blur-sm">
+                <CardHeader className="pb-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                        <div className="flex items-center gap-2 lg:col-span-2 relative">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                            <Input 
+                                placeholder="Cari materi..." 
+                                className="pl-10"
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                        </div>
+                        <Select value={filterClass} onValueChange={setFilterClass}>
+                            <SelectTrigger>
+                                <Filter className="mr-2 h-4 w-4 text-slate-400" />
+                                <SelectValue placeholder="Semua Kelas" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">Semua Kelas</SelectItem>
+                                {classes.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                        <Select value={filterSubject} onValueChange={setFilterSubject}>
+                            <SelectTrigger>
+                                <BookOpen className="mr-2 h-4 w-4 text-slate-400" />
+                                <SelectValue placeholder="Semua Mapel" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">Semua Mapel</SelectItem>
+                                {subjects.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                    </div>
+                </CardHeader>
+                <CardContent className="pt-0">
+                    {filteredMaterials.length > 0 ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {filteredMaterials.map((material) => (
+                                <Card key={material.id} className="group border-slate-200 hover:border-primary/30 transition-all duration-200 hover:shadow-md bg-white overflow-hidden">
+                                    <CardHeader className="pb-2">
+                                        <div className="flex justify-between items-start gap-3">
+                                            <div className="flex-shrink-0">
+                                                <FileCard formatFile={getFileFormat(material.link_url)} className="scale-75 origin-top-left" />
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <CardTitle className="text-base font-bold text-slate-900 truncate" title={material.title}>
+                                                    {material.title}
+                                                </CardTitle>
+                                                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                                    <Badge variant="secondary" className="text-[9px] uppercase font-bold tracking-wider py-0 px-1.5">
+                                                        {material.className}
+                                                    </Badge>
+                                                    <Badge variant="outline" className="text-[9px] uppercase font-bold tracking-wider text-primary border-primary/20 py-0 px-1.5">
+                                                        {material.subjectName}
+                                                    </Badge>
+                                                </div>
+                                            </div>
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 -mr-2 text-slate-400 hover:text-slate-900">
+                                                        <MoreHorizontal className="h-4 w-4" />
+                                                    </Button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end" className="w-40">
+                                                    <DropdownMenuItem onClick={() => handleOpenEditDialog(material)}>
+                                                        <Edit className="mr-2 h-4 w-4" /> Ubah
+                                                    </DropdownMenuItem>
+                                                    <DropdownMenuSeparator />
+                                                    <DropdownMenuItem 
+                                                        onClick={() => handleOpenDeleteDialog(material)}
+                                                        className="text-red-600 focus:text-red-600 focus:bg-red-50"
+                                                    >
+                                                        <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                                                    </DropdownMenuItem>
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
+                                        </div>
+                                    </CardHeader>
+                                    <CardContent className="pb-3 flex-grow mt-2">
+                                        <p className="text-sm text-slate-600 line-clamp-2 leading-relaxed mb-2">
+                                            {material.description || "Tidak ada deskripsi."}
+                                        </p>
+                                    </CardContent>
+                                    <CardFooter className="pt-0">
+                                        <Button asChild className="w-full bg-slate-50 hover:bg-primary hover:text-white text-primary border-primary/20" variant="outline">
+                                            <a href={material.link_url} target="_blank" rel="noopener noreferrer">
+                                                <Globe className="mr-2 h-4 w-4" />
+                                                Buka Materi
+                                                <ExternalLink className="ml-auto h-3 w-3 opacity-50" />
+                                            </a>
+                                        </Button>
+                                    </CardFooter>
+                                </Card>
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="text-center py-20 opacity-50">
+                            <div className="flex flex-col items-center gap-3">
+                                <Link2 className="h-12 w-12 text-slate-300" />
+                                <p className="text-sm font-medium">Belum ada materi dibagikan</p>
+                            </div>
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+                <DialogContent className="sm:max-w-lg dialog-content-mobile mobile-safe-area">
+                    <form onSubmit={handleSave}>
+                        <DialogHeader>
+                            <DialogTitle>{editingMaterial ? 'Ubah Materi' : 'Tambah Materi Baru'}</DialogTitle>
+                            <DialogDescription>
+                                Masukkan detail materi dan tautkan ke link sumber belajar.
+                            </DialogDescription>
+                        </DialogHeader>
+                        <div className="grid gap-4 py-4">
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <Label htmlFor="class_id">Kelas</Label>
+                                    <Select 
+                                        value={formState.class_id} 
+                                        onValueChange={(val) => setFormState({ ...formState, class_id: val })}
+                                        required
+                                    >
+                                        <SelectTrigger id="class_id">
+                                            <SelectValue placeholder="Pilih kelas" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {classes.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label htmlFor="subject_id">Mata Pelajaran</Label>
+                                    <Select 
+                                        value={formState.subject_id} 
+                                        onValueChange={(val) => setFormState({ ...formState, subject_id: val })}
+                                        required
+                                    >
+                                        <SelectTrigger id="subject_id">
+                                            <SelectValue placeholder="Pilih mapel" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {subjects.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="title">Judul Materi</Label>
+                                <Input 
+                                    id="title" 
+                                    placeholder="e.g. Modul Bab 1" 
+                                    value={formState.title}
+                                    onChange={(e) => setFormState({ ...formState, title: e.target.value })}
+                                    required
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="link_url">Tautan Materi (URL)</Label>
+                                <div className="relative">
+                                    <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                                    <Input 
+                                        id="link_url" 
+                                        type="url"
+                                        placeholder="https://..." 
+                                        className="pl-10"
+                                        value={formState.link_url}
+                                        onChange={(e) => setFormState({ ...formState, link_url: e.target.value })}
+                                        required
+                                    />
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="description">Deskripsi (Opsional)</Label>
+                                <Textarea 
+                                    id="description" 
+                                    placeholder="Deskripsi singkat..." 
+                                    className="min-h-[80px]"
+                                    value={formState.description}
+                                    onChange={(e) => setFormState({ ...formState, description: e.target.value })}
+                                />
+                            </div>
+                        </div>
+                        <DialogFooter className="flex flex-row gap-2">
+                            <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)} disabled={loading} className="flex-1 rounded-xl h-11">
+                                Batal
+                            </Button>
+                            <Button type="submit" disabled={loading} className="flex-1 rounded-xl h-11">
+                                {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                Simpan
+                            </Button>
+                        </DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
+
+            <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+                <AlertDialogContent className="rounded-3xl">
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Hapus Materi?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Materi akan dihapus secara permanen.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter className="flex flex-row gap-2">
+                        <AlertDialogCancel disabled={loading} className="flex-1 rounded-xl h-11">Batal</AlertDialogCancel>
+                        <AlertDialogAction 
+                            onClick={handleDelete} 
+                            disabled={loading}
+                            className="bg-red-600 hover:bg-red-700 flex-1 rounded-xl h-11"
+                        >
+                            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            Hapus
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+        </div>
+    );
+}

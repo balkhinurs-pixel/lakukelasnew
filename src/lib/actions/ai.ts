@@ -1,0 +1,221 @@
+'use server';
+
+import { generateEducationContent, type EducationContentInput, type EducationContentOutput } from '@/ai/flows/generate-education-content';
+import { generateQuestions, type GenerateQuestionsInput, type GenerateQuestionsOutput } from '@/ai/flows/generate-questions-flow';
+import { generateModulAjar, type ModulAjarInput, type ModulAjarOutput } from '@/ai/flows/generate-modul-ajar-flow';
+import { generateCpAtp, type CpAtpInput, type CpAtpOutput } from '@/ai/flows/generate-cp-atp-flow';
+import { createClient } from '@/lib/supabase/server';
+import { revalidatePath } from 'next/cache';
+import type { GeneratedQuestion, QuestionGenerationInput } from '@/lib/types';
+import { saveNaskahToDrive, saveCpAtpToDrive } from './google-drive';
+
+/**
+ * Server Action untuk memanggil flow AI RPP/Konten Dasar.
+ */
+export async function generateContentAction(input: EducationContentInput) {
+    try {
+        const result = await generateEducationContent(input);
+        return { success: true, data: result };
+    } catch (error: any) {
+        console.error("AI Generation Error:", error);
+        return { success: false, error: error.message || "Gagal menghubungi AI." };
+    }
+}
+
+/**
+ * Server Action khusus untuk Generate Modul Ajar (RPP) Profesional.
+ */
+export async function generateModulAjarAction(input: ModulAjarInput) {
+    const supabase = await createClient();
+    
+    try {
+        let finalAtpContent = "";
+        
+        // Jika guru memilih referensi ATP, ambil kontennya dari database
+        if (input.atp_id) {
+            const { data: atpDoc } = await supabase
+                .from('cp_atp')
+                .select('content')
+                .eq('id', input.atp_id)
+                .single();
+            
+            finalAtpContent = atpDoc?.content || "";
+        }
+
+        const result = await generateModulAjar({
+            ...input,
+            atpContent: finalAtpContent
+        });
+        
+        return { success: true, data: result };
+    } catch (error: any) {
+        console.error("Modul Ajar Generation Error:", error);
+        return { success: false, error: error.message || "Gagal menghasilkan modul ajar." };
+    }
+}
+
+/**
+ * Server Action untuk Generate CP & ATP.
+ */
+export async function generateCpAtpAction(input: CpAtpInput) {
+    try {
+        const result = await generateCpAtp(input);
+        return { success: true, data: result };
+    } catch (error: any) {
+        console.error("CP/ATP Generation Error:", error);
+        return { success: false, error: error.message || "Gagal menghasilkan pemetaan CP/ATP." };
+    }
+}
+
+/**
+ * Server Action untuk memanggil flow AI Generate Soal Terstruktur.
+ */
+export async function generateQuestionsAction(input: QuestionGenerationInput) {
+    try {
+        const result = await generateQuestions(input);
+        return { success: true, data: result };
+    } catch (error: any) {
+        console.error("Question Generation Error:", error);
+        return { success: false, error: error.message || "Gagal menghasilkan soal." };
+    }
+}
+
+/**
+ * Server Action untuk generate gambar menggunakan Pollinations.ai.
+ */
+export async function generateQuestionImageAction(prompt: string) {
+    try {
+        const sanitizedPrompt = prompt.replace(/[\n\r]/g, " ").trim();
+        const encodedPrompt = encodeURIComponent(sanitizedPrompt);
+        const seed = Math.floor(Math.random() * 1000000);
+        const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=768&nologo=true&model=flux&seed=${seed}`;
+        return { success: true, url: imageUrl };
+    } catch (error: any) {
+        return { success: false, error: "Gagal merumuskan link gambar ilustrasi." };
+    }
+}
+
+/**
+ * Server Action untuk menyimpan kumpulan soal ke database Bank Soal.
+ */
+export async function saveQuestionsAction(config: QuestionGenerationInput, questions: GeneratedQuestion[]) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { success: false, error: "Tidak terautentikasi." };
+
+    try {
+        const groupId = crypto.randomUUID();
+        const rows = questions.map(q => ({
+            created_by: user.id,
+            generation_group_id: groupId,
+            jenjang: config.jenjang,
+            kelas: config.kelas,
+            semester: config.semester,
+            subject: config.subject,
+            curriculum: config.curriculum,
+            assessment_purpose: config.assessment_purpose,
+            topic: config.topic,
+            subtopic: config.subtopic,
+            sort_order: q.sort_order,
+            question_type: q.type,
+            question_text: q.question,
+            options_json: q.options || null,
+            correct_answer: q.answer,
+            explanation: q.explanation,
+            difficulty: q.difficulty,
+            cognitive_level: q.cognitive_level,
+            language_direction: q.language_direction || 'ltr',
+            status: 'draft',
+            needs_review: true,
+            image_url: q.image_url || null
+        }));
+
+        const { error } = await supabase.from('questions').insert(rows);
+        if (error) throw error;
+
+        revalidatePath('/dashboard/ai-pembelajaran/bank-soal');
+        return { success: true };
+    } catch (error: any) {
+        return { success: false, error: "Gagal menyimpan ke database." };
+    }
+}
+
+/**
+ * Server Action untuk menghapus soal dari Bank Soal.
+ */
+export async function deleteQuestionsAction(ids: string[]) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { success: false, error: "Tidak terautentikasi." };
+
+    try {
+        await supabase.from('questions').delete().in('id', ids).eq('created_by', user.id);
+        revalidatePath('/dashboard/ai-pembelajaran/bank-soal');
+        return { success: true };
+    } catch (error: any) {
+        return { success: false, error: "Gagal menghapus data soal." };
+    }
+}
+
+/**
+ * Server Action untuk menyusun naskah ujian.
+ */
+export async function createNaskahUjianAction(
+    title: string, 
+    selectedQuestionIds: string[], 
+    metadata: { jenjang: string, class: string, subject: string, schoolName: string, examType: string },
+    format: 'pdf' | 'doc' = 'doc',
+    binaryData?: string
+) {
+    const supabase = await createClient();
+    
+    // Jika format adalah PDF, unggah data biner ke Drive
+    if (format === 'pdf' && binaryData) {
+        const result = await saveNaskahToDrive(title, binaryData, metadata, 'pdf');
+        return { ...result, format: 'pdf' };
+    }
+
+    // Jika format adalah DOC, ambil data soal dan susun Markdown
+    const { data: questions, error: fetchError } = await supabase
+        .from('questions')
+        .select('*')
+        .in('id', selectedQuestionIds);
+
+    // Pastikan soal diurutkan sesuai urutan input array IDs
+    const orderedQuestions = selectedQuestionIds.map(id => questions?.find(q => q.id === id)).filter(Boolean);
+
+    if (fetchError || orderedQuestions.length === 0) {
+        return { success: false, error: "Gagal mengambil data soal terpilih." };
+    }
+
+    // Bangun Konten Naskah Formal (Markdown)
+    let content = `
+${metadata.schoolName.toUpperCase()}
+${metadata.examType.toUpperCase()}
+==========================================
+Jenjang        : ${metadata.jenjang}
+Mata Pelajaran : ${metadata.subject}
+Kelas          : ${metadata.class}
+Tanggal        : ${new Date().toLocaleDateString('id-ID')}
+==========================================
+
+`;
+
+    orderedQuestions.forEach((q, idx) => {
+        content += `${idx + 1}. ${q.question_text}\n`;
+        if (q.options_json) {
+            Object.entries(q.options_json as Record<string, string>).sort().forEach(([key, val]) => {
+                content += `   ${key}. ${val}\n`;
+            });
+        }
+        content += `\n`;
+    });
+
+    const result = await saveNaskahToDrive(title, content, metadata, 'doc');
+    
+    return { 
+        ...result, 
+        markdown: content,
+        format: 'doc'
+    };
+}
